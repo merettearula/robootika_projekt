@@ -11,9 +11,14 @@
 #define BUTTON_4_PIN 6
 #define BUTTON_5_PIN 7
 
-
-int buzzer = 8;
+const int micPin = A0; // Mikrofoni sisendpinn
 int buttonState = 0;       // Nupu oleku jälgimine
+
+// BPM konstandid
+const int MIN_BPM = 40;
+const int MAX_BPM = 240;
+const int BPM_THRESHOLD = 270;
+const int MIN_INTERVAL_BETWEEN_BEATS = 300; // millisekundites
 
 const uint32_t colors_1989[NUM_LEDS] PROGMEM = {
 0xFF0000,0xFF0000,0xFF0000,0xFF0000,0xFF0000,0xFF0000,0xFF0000,0xFF0000,0xFF0000,0xFF0000,0xFF0000,0xFF0000,0xFF0000,0xFF0000,0xFF0000,0xFF0000,
@@ -114,75 +119,135 @@ const uint32_t colors_heart[NUM_LEDS] PROGMEM = {
 };
 
 
-// Aktiivne massiiv (vaikimisi)
-const uint32_t* activeColors = nullptr;
-
-
 Adafruit_NeoPixel strip = Adafruit_NeoPixel(NUM_LEDS, DATA_PIN, NEO_GRB + NEO_KHZ800);
 
-int tempo = 100; // kiirus BPM
-int wholenote = (60000 * 4) / tempo; // täisnoodi kestus ms
-
-
-
+const uint32_t* activeColors = nullptr;
+int currentBPM = 0;
+unsigned long lastBeatTime = 0;
+unsigned long currentTime = 0;
 
 void setup() {
-  pinMode(BUTTON_0_PIN, INPUT_PULLUP); // Esimene nupp
-  pinMode(BUTTON_1_PIN, INPUT_PULLUP); // Esimene nupp
-  pinMode(BUTTON_2_PIN, INPUT_PULLUP); // Teine nupp
-  pinMode(BUTTON_3_PIN, INPUT_PULLUP); // Esimene nupp
-  pinMode(BUTTON_4_PIN, INPUT_PULLUP); // Teine nupp
-  pinMode(BUTTON_5_PIN, INPUT_PULLUP); // Teine nupp
+  // Nuppude seadistamine
+  pinMode(BUTTON_0_PIN, INPUT_PULLUP);
+  pinMode(BUTTON_1_PIN, INPUT_PULLUP);
+  pinMode(BUTTON_2_PIN, INPUT_PULLUP);
+  pinMode(BUTTON_3_PIN, INPUT_PULLUP);
+  pinMode(BUTTON_4_PIN, INPUT_PULLUP);
+  pinMode(BUTTON_5_PIN, INPUT_PULLUP);
+  
+  // Mikrofoni pin sisendiks
+  pinMode(micPin, INPUT);
 
+  // Buzzer väljundiks
   pinMode(BUZZER_PIN, OUTPUT);
+
+  // LED-riba inizialiseerimine
   strip.begin();
   strip.setBrightness(3);
   strip.show(); // Alguses kustutatud LED-d
+
+  // Silumine
+  Serial.begin(9600);
 }
 
-void showLEDPattern() {
-  for (int i = 0; i < NUM_LEDS; i++) {
-    uint32_t color = pgm_read_dword(&activeColors[i]); // Loeb aktiivset massiivi
-    strip.setPixelColor(i, color);
-  }
-  strip.show(); // Uuenda LED-id
+// Filtreerib BPM-i lubatud vahemikku
+int filterBPM(int rawBPM) {
+    if (rawBPM < MIN_BPM) return 0;
+    if (rawBPM > MAX_BPM) return MAX_BPM;
+    return rawBPM;
 }
 
+// Kustutab kõik LED-id
 void clearLEDs() {
   for (int i = 0; i < strip.numPixels(); i++) {
-    strip.setPixelColor(i, 0); // Seadistab LED-i mustaks (0x000000)
+    strip.setPixelColor(i, 0);
   }
+  strip.show();
 }
+
+// Näitab LED-mustrit BPM-i järgi
+void showLEDPatternWithBPM(int bpm) {
+    if (bpm > 0 && activeColors != nullptr) {
+        int delayTime = 60000 / bpm; // Arvuta viivitus millisekundites
+        
+        // Näita LED-mustrit
+        for (int i = 0; i < NUM_LEDS; i++) {
+            uint32_t color = pgm_read_dword(&activeColors[i]);
+            strip.setPixelColor(i, color);
+        }
+        
+        strip.show();
+        delay(delayTime / 2);
+        
+        clearLEDs();
+        delay(delayTime / 2);
+    }
+}
+
+int buttonPressed = 0;
 
 void loop() {
+    // Loe mikrofoni sisend
+    int micValue = analogRead(micPin);
+    currentTime = millis();
 
-  if (digitalRead(BUTTON_0_PIN) == LOW) { // Kui nuppu vajutatakse
-    clearLEDs();
-    strip.show();
-  }
-  if (digitalRead(BUTTON_1_PIN) == LOW) { // Kui nuppu vajutatakse (LOW, sest pull-up takisti)
-    activeColors = colors_red_album;
-    showLEDPattern();
-  }
+    // BPM arvutamine
+    if (micValue > BPM_THRESHOLD && 
+        (currentTime - lastBeatTime > MIN_INTERVAL_BETWEEN_BEATS)) {
+        
+        unsigned long interval = currentTime - lastBeatTime;
+        int rawBPM = 60000 / interval;
+        
+        // Filtreeri BPM
+        currentBPM = filterBPM(rawBPM);
+        
+        lastBeatTime = currentTime;
 
-  if (digitalRead(BUTTON_2_PIN) == LOW) { // Teine nupp
-    activeColors = colors_1989; // Valib esimese massiivi
-    showLEDPattern();
-  }
+        // Väljasta silumisel
+        Serial.print("Detected BPM: ");
+        Serial.println(currentBPM);
+    }
 
-   if (digitalRead(BUTTON_3_PIN) == LOW) { // Kui nuppu vajutatakse (LOW, sest pull-up takisti)
-    activeColors = colors_butterfly;
-    showLEDPattern();
-  }
+    // Nuppude kontroll mustrivahetuseks
+    if (digitalRead(BUTTON_0_PIN) == LOW) {
+        clearLEDs();
+    }
+    
+    if (digitalRead(BUTTON_1_PIN) == LOW) {
+        activeColors = colors_red_album;  
+        showLEDPatternWithBPM(currentBPM);
+    }
 
-  if (digitalRead(BUTTON_4_PIN) == LOW) { // Kui nuppu vajutatakse (LOW, sest pull-up takisti)
-    activeColors = colors_fearless;
-    showLEDPattern();
-  }
+    if (digitalRead(BUTTON_2_PIN) == LOW) {
+        activeColors = colors_1989;
+        showLEDPatternWithBPM(currentBPM);
+    }
 
-  if (digitalRead(BUTTON_5_PIN) == LOW) { // Kui nuppu vajutatakse (LOW, sest pull-up takisti)
-    activeColors = colors_heart;
-    showLEDPattern();
-  }
+    if (digitalRead(BUTTON_3_PIN) == LOW) {
+        activeColors = colors_butterfly;
+        
+        showLEDPatternWithBPM(currentBPM);
+    }
+
+    if (digitalRead(BUTTON_4_PIN) == LOW) {
+        activeColors = colors_fearless;
+        
+        showLEDPatternWithBPM(currentBPM);
+    }
+
+    if (digitalRead(BUTTON_5_PIN) == LOW) {
+        activeColors = colors_heart;
+        
+        showLEDPatternWithBPM(currentBPM);
+    }
+
+    delay(5);
 }
 
+// Abifunktsioon BPM-i aktiveerimiseks
+void activateBPMMode(int bpm) {
+    if (bpm > 0) {
+        Serial.print("Activated BPM Mode: ");
+        Serial.println(bpm);
+    }
+}
